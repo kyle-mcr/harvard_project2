@@ -1,22 +1,27 @@
-{% extends 'layout.html' %}
+{% extends "layout.html" %}
 
-{% block body%}
-<style>
-    h1{
-        font-family: 'Lucida Sans', 'Lucida Sans Regular', 'Lucida Grande', 'Lucida Sans Unicode', Geneva, Verdana, sans-serif;
-        font-style:italic;
-    }
-    form{
-        width:25%;
-        margin-left:35%;
-    }
-</style>
-<h1 class="text-center" > Create a username to enter the chatroom </h1>
-<form class="form-signin" action="{{ url_for('chatroomlist')}}" method="post">
-        <div class="form-group mt-3">
-         <label for="user_name" class="mb-1"> Enter a username: </label>
-            <input type="text" id="user_name" class="form-control p-4" placeholder="Username" required name="user_name">
-            <button type="submit" class="mt-1 btn btn-lg btn-success"> Submit </button>
+{% block title %}
+    Flack Chat
+{% endblock %}
+
+{% block content %}
+<div class="sign_body">
+    <h2>Don't see a channel you like? Create One!</h2>
+    <form action="/create" method="post">
+        <div class="form-group">
+            <input type="text" class="form-control" name="channel" placeholder="Channel Name" id="channel" autofocus>
         </div>
+        <button class="btn btn-primary" type="submit">Create</button>
     </form>
+</div>
+
+    <script>
+
+        if (localStorage.getItem('last_channel')) {
+            // Redirect to last channel
+            let channel = localStorage.getItem('last_channel');    
+            window.location.replace('/channels/' + channel);   
+        }
+
+    </script>
 {% endblock %}

@@ -1,13 +1,19 @@
-
 {% extends "layout.html" %}
 
-{% block body %}
+{% block title %}
+    Error
+{% endblock %}
+
+{% block content %}
     <br>
     <div class="alert alert-danger" role="alert">
         <h4 class="alert-heading">Uh-Oh! An Error Occurred!</h4><br>
         <p>
-          {{ error_message }}
+          {{ message }}
         </p>
+        <a href="/"> 
+            <button class="btn btn-danger" type="button">Try something else</button>
+        </a>
     </div>
 
 {% endblock %}

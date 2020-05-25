@@ -1,135 +1,159 @@
 import os
 
-from datetime import datetime
-from flask import Flask, render_template, session, request, redirect, url_for, jsonify
-from flask_session import Session
-from flask_socketio import SocketIO, emit
+from collections import deque
+
+from flask import Flask, render_template, session, request, redirect
+from flask_socketio import SocketIO, send, emit, join_room, leave_room
+
+from helpers import login_required
 
 app = Flask(__name__)
-# configuring session to use filesystem
-app.config["SESSION_PERMANENT"] = False
-app.config["SESSION_TYPE"] = "filesystem"
-Session(app)
-
-# configuring socketio
-app.config["SECRET_KEY"] = 'my secret key'
+app.config["SECRET_KEY"] = "my secret key"
 socketio = SocketIO(app)
 
-chatlist = []  # List to store chatroom names
-usernames = []  # List to store current users
-messagedict = {}  # Dictionary ot store user, his/her message and time
+# Keep track of channels created (Check for channel name)
+channelsCreated = []
 
+# Keep track of users logged (Check for username)
+usersLogged = []
 
-# First page to load if display name not provided
+# Instanciate a dict
+channelsMessages = dict()
+
 @app.route("/")
+@login_required
 def index():
-    # Check if the user was already present
-    if "user_name" in session:
 
-        # If user was in a chat before quiting take him to the previous chat
-        if "chat_id" in session:
-            if len(chatlist) >= session["chat_id"]:
-                return redirect(url_for('chatroom', chat_id=session["chat_id"]))
+    return render_template("index.html", channels=channelsCreated)
 
-        # If user is logged in take him to the list of chatrooms
-        return redirect(url_for('chatroomlist'))
-    return render_template("index.html")
+@app.route("/signin", methods=['GET','POST'])
+def signin():
+    ''' Save the username on a Flask session 
+    after the user submit the sign in form '''
 
+    # Forget any username
+    session.clear()
 
-# To logout from the site
-@app.route("/logout", methods=["GET"])
-def logout():
+    username = request.form.get("username")
+    
+    if request.method == "POST":
 
-    # Removing username from username list and from session
-    try:
-        hell = session.pop("user_name")
-    except KeyError:
-        return render_template("error.html", error_message="Please identify yourself first")
+        if len(username) < 1 or username is '':
+            return render_template("error.html", message="username can't be empty.")
+
+        if username in usersLogged:
+            return render_template("error.html", message="that username already exists!")                   
+        
+        usersLogged.append(username)
+
+        session['username'] = username
+
+        # Remember the user session on a cookie if the browser is closed.
+        session.permanent = True
+
+        return redirect("/")
     else:
-        usernames.remove(hell)
-    return redirect(url_for('index'))
+        return render_template("signin.html")
 
+@app.route("/logout", methods=['GET'])
+def logout():
+    """ Logout user from list and delete cookie."""
 
-# First page to load if display name provided and to view channel lists
-@app.route("/chatrooms", methods=["GET", "POST"])
-def chatroomlist():
+    # Remove from list
+    try:
+        usersLogged.remove(session['username'])
+    except ValueError:
+        pass
 
-    # Check if the username submitted from index is valid and if valid add it to username list and to session
+    # Delete cookie
+    session.clear()
+
+    return redirect("/")
+
+@app.route("/create", methods=['GET','POST'])
+def create():
+    """ Create a channel and redirect to its page """
+
+    # Get channel name from form
+    newChannel = request.form.get("channel")
+
     if request.method == "POST":
-        user_name = request.form.get("user_name")
-        if user_name in usernames:
-            return render_template("error.html", error_message="Username already exists.")
-        usernames.append(user_name)
-        session["user_name"] = user_name
-        usernames 
 
-    # If user isn't logged it show and error page
-    if request.method=="GET" and "user_name" not in session:
-        return render_template("error.html", error_message="Please identify yourself first.")
+        if newChannel in channelsCreated:
+            return render_template("error.html", message="that channel already exists!")
+        
+        # Add channel to global list of channels
+        channelsCreated.append(newChannel)
 
-    return render_template("chatlist.html", chatlist=chatlist, user_name=session["user_name"], usernames=usernames)
+        # Add channel to global dict of channels with messages
+        # Every channel is a deque to use popleft() method 
+        # https://stackoverflow.com/questions/1024847/add-new-keys-to-a-dictionary
+        channelsMessages[newChannel] = deque()
 
+        return redirect("/channels/" + newChannel)
+    
+    else:
 
-# Specific page for a chatroom
-@app.route("/chatrooms/<int:chat_id>", methods=["GET", "POST"])
-def chatroom(chat_id):
+        return render_template("create.html", channels = channelsCreated)
 
-    # Check the validity of chatroom submitted by chatroomlist page
+@app.route("/channels/<channel>", methods=['GET','POST'])
+@login_required
+def enter_channel(channel):
+    """ Show channel page to send and receive messages """
+
+    # Updates user current channel
+    session['current_channel'] = channel
+
     if request.method == "POST":
-        chatroom_name = request.form.get("chatroom_name")
-        if chatroom_name in chatlist:
-            return render_template("error.html", error_message="The chatroom already exists.")
+        
+        return redirect("/")
+    else:
+        return render_template("channel.html", channels= channelsCreated, messages=channelsMessages[channel])
 
-        # Add chatroom to chatroom list and create an empty list on its name on messages dictionary
-        chatlist.append(chatroom_name)
-        messagedict[chatroom_name] = []
+@socketio.on("joined", namespace='/')
+def joined():
+    """ Send message to announce that user has entered the channel """
+    
+    # Save current channel to join room.
+    room = session.get('current_channel')
 
-    # Check if user is logged in and if the requested chatroom exists
-    if request.method == "GET":
-        if "user_name" not in session:
-            return render_template("error.html", error_message="Please identify yourself first.")
-        if len(chatlist) < chat_id:
-            return render_template("error.html", error_message="Chatroom Doesn't Exist."
-                                                               " If you want the same chatroom, go back and create one")
+    join_room(room)
+    
+    emit('status', {
+        'userJoined': session.get('username'),
+        'channel': room,
+        'msg': session.get('username') + ' has entered the channel'}, 
+        room=room)
 
-    # Add id of current channel of user to his/her session
-    session["chat_id"] = chat_id
+@socketio.on("left", namespace='/')
+def left():
+    """ Send message to announce that user has left the channel """
 
-    return render_template("chatroom.html", user_name=session["user_name"])
+    room = session.get('current_channel')
 
+    leave_room(room)
 
-# Socket io to retrieve messages for a chat room
-@socketio.on("submit message")
-def message(data):
-    selection = data["selection"]
-    time = datetime.now().strftime("%Y-%m-%d %H:%M")  # Retrieving current datetime
+    emit('status', {
+        'msg': session.get('username') + ' has left the channel'}, 
+        room=room)
 
-    # Dictionary to save with messages
-    response_dict = {"selection": selection, "time": time, "user_name": session["user_name"]}
-    messagelist = messagedict[chatlist[session["chat_id"] - 1]]
+@socketio.on('send message')
+def send_msg(msg, timestamp):
+    """ Receive message with timestamp and broadcast on the channel """
 
-    # When messages reaches 100 delete start deleting first ones
-    if len(messagelist) == 100:
-        del messagelist[0]
+    # Broadcast only to users on the same channel.
+    room = session.get('current_channel')
 
-    # Add message to the messages of the current channel
-    messagelist.append(response_dict)
-    emit("cast message", {**response_dict, **{"chat_id": str(session["chat_id"])}}, broadcast=True)
+    # Save 100 messages and pass them when a user joins a specific channel.
 
+    if len(channelsMessages[room]) > 100:
+        # Pop the oldest message
+        channelsMessages[room].popleft()
 
-# To instantly update channel
-@socketio.on("submit channel")
-def submit_channel(data):
+    channelsMessages[room].append([timestamp, session.get('username'), msg])
 
-    # Emit latest chat_id along with what came from a user to all users
-    emit("cast channel", {"selection": data["selection"], "chat_id": len(chatlist) + 1}, broadcast=True)
-
-
-# return messages of a chatroom through Ajax request along with chat_id of session
-@app.route("/listmessages", methods=["POST"])
-def listmessages():
-    return jsonify({**{"message": messagedict[chatlist[session["chat_id"]-1]]}, **{"chat_id": session["chat_id"]}})
-
-
-if __name__ == "__main__":
-    app.run(debug=True)
+    emit('announce message', {
+        'user': session.get('username'),
+        'timestamp': timestamp,
+        'msg': msg}, 
+        room=room)
